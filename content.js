@@ -81,61 +81,165 @@
         markdown += '---\n\n';
         
         // Convert element content
-        markdown += processElement(element);
+        markdown += processElementIterative(element); // Updated function call
         
         return markdown;
     }
-    
-    function processElement(element) {
-        const tag = element.tagName.toLowerCase();
-        
-        switch (tag) {
-            case 'h1': return `# ${getTextContent(element)}\n\n`;
-            case 'h2': return `## ${getTextContent(element)}\n\n`;
-            case 'h3': return `### ${getTextContent(element)}\n\n`;
-            case 'h4': return `#### ${getTextContent(element)}\n\n`;
-            case 'h5': return `##### ${getTextContent(element)}\n\n`;
-            case 'h6': return `###### ${getTextContent(element)}\n\n`;
-            case 'p': return `${processChildren(element)}\n\n`;
-            case 'strong':
-            case 'b': return `**${getTextContent(element)}**`;
-            case 'em':
-            case 'i': return `*${getTextContent(element)}*`;
-            case 'code': return `\`${getTextContent(element)}\``;
-            case 'pre': return `\`\`\`\n${getTextContent(element)}\n\`\`\`\n\n`;
-            case 'a':
-                const href = element.getAttribute('href');
-                const text = getTextContent(element);
-                return href ? `[${text}](${href})` : text;
-            case 'img':
-                const src = element.getAttribute('src');
-                const alt = element.getAttribute('alt') || 'Image';
-                return src ? `![${alt}](${src})\n\n` : '';
-            case 'ul':
-                return processUL(element) + '\n\n';
-            case 'ol':
-                return processOL(element) + '\n\n';
-            case 'blockquote':
-                return processBlockquote(element) + '\n\n';
-            case 'table':
-                return processTable(element) + '\n\n';
-            case 'br':
-                return '\n';
-            default:
-                return processChildren(element);
-        }
-    }
-    
-    function processChildren(element) {
-        let result = '';
-        for (const child of element.childNodes) {
-            if (child.nodeType === Node.TEXT_NODE) {
-                result += child.textContent;
-            } else if (child.nodeType === Node.ELEMENT_NODE) {
-                result += processElement(child);
+
+    // Iterative function to process elements and avoid call stack limits
+    function processElementIterative(rootElement) {
+        let markdown = '';
+        // Queue items can be: { element: DOMElement } or { type: 'suffix', content: String }
+        const queue = [{ element: rootElement }]; 
+
+        while (queue.length > 0) {
+            const item = queue.shift(); // Process items from the front
+
+            if (item.type === 'suffix') {
+                markdown += item.content;
+                continue;
+            }
+
+            const element = item.element;
+
+            if (element.nodeType === Node.TEXT_NODE) {
+                let text = element.textContent;
+                // Avoid adding empty text nodes or text nodes that are just whitespace if they don't affect formatting
+                if (!element.parentElement || element.parentElement.tagName.toLowerCase() !== 'pre') {
+                    if (text.trim() === '') {
+                        // If the text node is surrounded by block elements or is at the start/end of one,
+                        // it might be ignorable. For inline context, even a space can be significant.
+                        // A simple heuristic: if it's purely whitespace and the markdown doesn't end with a space,
+                        // it might be a formatting artifact.
+                        // Example: <p> text <span> space </span> more text </p>
+                        // The space inside span should be preserved.
+                        // Example: <p> text \n <span></span> \n more text </p> -> text space more text
+                        // Let's be conservative: replace multiple newlines/spaces with a single space.
+                        // Then, if it's just a single space, ensure it doesn't create double spacing with previous output.
+                        text = text.replace(/\s+/g, ' ');
+                        if (text === ' ' && (markdown.endsWith(' ') || markdown.endsWith('\n'))) {
+                           text = ''; // Avoid double space or space after newline
+                        }
+                    }
+                }
+                markdown += text;
+                continue;
+            }
+
+            if (element.nodeType !== Node.ELEMENT_NODE) {
+                continue; // Skip comments, other node types
+            }
+
+            const tag = element.tagName.toLowerCase();
+            let childrenToQueue = []; // Children will be added to the front of the queue (for DFS)
+            let openingTagMarkdown = '';
+            let closingTagSuffixContent = ''; // Content for the suffix item
+
+            // Default order: suffix marker, then children (reversed, so they are processed in correct order)
+            // Example: For <strong><em>text</em></strong>
+            // Process <strong>: md="**", add {type:suffix, c:"**"}, add <em> to queue
+            // Process <em>: md="**<em>", add {type:suffix, c:"*"}, add "text" to queue
+            // Process "text": md="**<em>text"
+            // Process </em> suffix: md="**<em>text*";
+            // Process </strong> suffix: md="**<em>text*</strong>";
+
+            switch (tag) {
+                case 'h1': openingTagMarkdown = `# ${getTextContent(element)}\n\n`; break;
+                case 'h2': openingTagMarkdown = `## ${getTextContent(element)}\n\n`; break;
+                case 'h3': openingTagMarkdown = `### ${getTextContent(element)}\n\n`; break;
+                case 'h4': openingTagMarkdown = `#### ${getTextContent(element)}\n\n`; break;
+                case 'h5': openingTagMarkdown = `##### ${getTextContent(element)}\n\n`; break;
+                case 'h6': openingTagMarkdown = `###### ${getTextContent(element)}\n\n`; break;
+                case 'p': closingTagSuffixContent = '\n\n'; childrenToQueue = Array.from(element.childNodes); break;
+                case 'strong':
+                case 'b': openingTagMarkdown = `**`; closingTagSuffixContent = `**`; childrenToQueue = Array.from(element.childNodes); break;
+                case 'em':
+                case 'i': openingTagMarkdown = `*`; closingTagSuffixContent = `*`; childrenToQueue = Array.from(element.childNodes); break;
+                case 'code':
+                    if (!element.closest('pre')) { // Inline code
+                        openingTagMarkdown = `\`${getTextContent(element)}\``; // getTextContent for inline code
+                        // No children to process for inline code as getTextContent handles it.
+                    } else { // Code within pre
+                        // Content of <code> within <pre> is typically handled by <pre>'s own text processing
+                        // or by allowing its text node children to be processed.
+                        // If <code> has its own children (e.g. <code><span>text</span></code> inside pre), process them.
+                        childrenToQueue = Array.from(element.childNodes);
+                    }
+                    break;
+                case 'pre':
+                    openingTagMarkdown = `\`\`\`\n${getTextContent(element)}\n\`\`\`\n\n`;
+                    // Children content already included via getTextContent for <pre>
+                    break;
+                case 'a':
+                    const href = element.getAttribute('href');
+                    // getTextContent for 'a' is generally fine. If 'a' contains complex block children, this simplification might lose formatting.
+                    const linkText = getTextContent(element); 
+                    openingTagMarkdown = href ? `[${linkText}](${href})` : linkText;
+                    // Children content grabbed by getTextContent
+                    break;
+                case 'img':
+                    const src = element.getAttribute('src');
+                    const alt = element.getAttribute('alt') || 'Image';
+                    openingTagMarkdown = src ? `![${alt}](${src})\n\n` : '';
+                    break;
+                case 'ul':
+                    openingTagMarkdown = processUL(element) + '\n'; // processUL adds its own \n after each item. Add one more for spacing after list.
+                    // processUL uses querySelectorAll and getTextContent, so children are not processed by this loop.
+                    break;
+                case 'ol':
+                    openingTagMarkdown = processOL(element) + '\n'; // Similar to UL.
+                    break;
+                case 'li': // Special handling for li if we were to make lists iterative
+                    // For now, li content is handled by processUL/processOL using getTextContent.
+                    // If li were processed iteratively:
+                    // openingTagMarkdown = (element.parentElement.tagName.toLowerCase() === 'ul' ? '- ' : '1. '); // Simplified index for OL
+                    // childrenToQueue = Array.from(element.childNodes);
+                    // closingTagSuffixContent = '\n';
+                    // Fallthrough to default to let processUL/OL handle it via getTextContent for now
+                    // This means children of LI won't be processed by the main loop if parent is UL/OL.
+                    // If LI is encountered outside UL/OL (invalid HTML), process as default.
+                    if (element.parentElement && (element.parentElement.tagName.toLowerCase() === 'ul' || element.parentElement.tagName.toLowerCase() === 'ol')) {
+                        // This case should ideally not be hit if processUL/OL are used, as they consume LIs.
+                        // If it is hit, it means an LI is being processed directly.
+                        // We will rely on processUL/OL to handle LIs for now.
+                    } else {
+                         childrenToQueue = Array.from(element.childNodes); // Process as a generic element
+                    }
+                    break;
+                case 'blockquote':
+                    openingTagMarkdown = processBlockquote(element) + '\n\n';
+                    // processBlockquote uses getTextContent.
+                    break;
+                case 'table':
+                    openingTagMarkdown = processTable(element) + '\n\n';
+                    // processTable uses querySelectorAll and getTextContent.
+                    break;
+                case 'br':
+                    openingTagMarkdown = '\n';
+                    break;
+                default: // Handles div, span, and other passthrough elements
+                    childrenToQueue = Array.from(element.childNodes);
+                    break;
+            }
+
+            markdown += openingTagMarkdown;
+
+            const itemsToAddToQueue = [];
+            if (closingTagSuffixContent) {
+                itemsToAddToQueue.push({ type: 'suffix', content: closingTagSuffixContent });
+            }
+
+            // Add children elements (not text nodes directly, they are handled when element is processed)
+            // Add in reverse order so they are processed from first to last (due to unshift)
+            for (let i = childrenToQueue.length - 1; i >= 0; i--) {
+                itemsToAddToQueue.push({ element: childrenToQueue[i] });
+            }
+            
+            if (itemsToAddToQueue.length > 0) {
+                queue.unshift(...itemsToAddToQueue);
             }
         }
-        return result;
+        return markdown;
     }
     
     function getTextContent(element) {
