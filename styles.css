@@ -1,14 +1,6 @@
-/* styles.css */
-._elementInspectorHighlightByExtension {
-  outline: 2px dashed #007bff !important; /* A distinct blue outline */
-  background-color: rgba(0, 123, 255, 0.1) !important; /* Light blue semi-transparent background */
-  box-shadow: 0 0 0 2px white, 0 0 0 4px #007bff !important; /* Ensure visibility on various backgrounds */
-  cursor: crosshair !important; /* Indicate selection mode */
-  transition: outline 0.05s ease-in-out, background-color 0.05s ease-in-out; /* Smooth transition for highlight */
-  z-index: 2147483647 !important; /* Max z-index to try to be on top */
-}
-
-/* Optional: Style for when the body has the crosshair cursor */
-body[style*="cursor: crosshair;"] {
-  /* You could add styles here if needed, but direct style manipulation is often enough */
+.element-selector-highlight {
+    outline: 3px solid #1a73e8 !important;
+    outline-offset: 2px !important;
+    background-color: rgba(26, 115, 232, 0.1) !important;
+    cursor: crosshair !important;
 }

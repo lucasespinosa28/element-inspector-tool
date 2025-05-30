@@ -1,154 +1,216 @@
-// content.js
-let selectionModeActive = false;
-let currentHoveredElement = null;
-const HIGHLIGHT_CLASS = '_elementInspectorHighlightByExtension'; // Unique class name
-
-// Function to apply highlight
-function highlightElement(element) {
-  if (element && !element.classList.contains(HIGHLIGHT_CLASS)) {
-    element.classList.add(HIGHLIGHT_CLASS);
-  }
-}
-
-// Function to remove highlight
-function removeHighlight(element) {
-  if (element && element.classList.contains(HIGHLIGHT_CLASS)) {
-    element.classList.remove(HIGHLIGHT_CLASS);
-  }
-}
-
-// Mouseover event listener
-function handleMouseOver(event) {
-  if (!selectionModeActive || !event.target) return;
-  
-  // If we are hovering over an already highlighted element that is not the current one,
-  // or if the target is the highlighter itself, do nothing.
-  if (event.target.classList.contains(HIGHLIGHT_CLASS) && event.target !== currentHoveredElement) return;
-
-  if (currentHoveredElement && currentHoveredElement !== event.target) {
-    removeHighlight(currentHoveredElement);
-  }
-  currentHoveredElement = event.target;
-  highlightElement(currentHoveredElement);
-}
-
-// Mouseout event listener
-function handleMouseOut(event) {
-  if (!selectionModeActive || !event.target) return;
-  // Only remove highlight if the mouse truly left the element
-  // and isn't moving to a child element that would also be highlighted.
-  if (currentHoveredElement === event.target) {
-     removeHighlight(currentHoveredElement);
-     currentHoveredElement = null;
-  }
-}
-
-// Click event listener
-function handleClick(event) {
-  if (!selectionModeActive || !event.target) return;
-
-  event.preventDefault();
-  event.stopPropagation();
-  event.stopImmediatePropagation(); // Crucial to prevent other click handlers
-
-  const targetElement = event.target;
-
-  // Log element details
-  console.groupCollapsed(
-    `%cElement Inspector: %c${targetElement.tagName.toLowerCase()}${targetElement.id ? '#' + targetElement.id : ''}${targetElement.className && typeof targetElement.className === 'string' ? '.' + targetElement.className.trim().replace(/\s+/g, '.') : ''}`,
-    'color: #007bff; font-weight: bold;', 'color: black; font-weight: normal;'
-  );
-  console.log("Selected DOM Element:", targetElement);
-  console.log("Tag Name:", targetElement.tagName);
-  console.log("ID:", targetElement.id || "N/A");
-  console.log("Classes:", targetElement.classList.length > 0 ? Array.from(targetElement.classList).filter(c => c !== HIGHLIGHT_CLASS).join(', ') : "N/A");
-  
-  const attributes = {};
-  if (targetElement.hasAttributes()) {
-    for (let i = 0; i < targetElement.attributes.length; i++) {
-      const attr = targetElement.attributes[i];
-      if (attr.name !== 'class' && attr.name !== 'id' && attr.name !== 'style') { // Avoid redundancy for already logged common attributes
-         attributes[attr.name] = attr.value;
-      }
-    }
-  }
-  console.log("Other Attributes:", Object.keys(attributes).length > 0 ? attributes : "N/A");
-  console.log("Outer HTML Snippet:", targetElement.outerHTML.substring(0, 200) + (targetElement.outerHTML.length > 200 ? "..." : ""));
-  // For full outerHTML if needed: console.log("Full Outer HTML:", targetElement.outerHTML);
-  
-  try {
-    const computedStyles = window.getComputedStyle(targetElement);
-    console.log("Computed Display:", computedStyles.getPropertyValue('display'));
-    console.log("Computed Visibility:", computedStyles.getPropertyValue('visibility'));
-    console.log("Computed Position:", computedStyles.getPropertyValue('position'));
-    console.log("Computed Dimensions (W x H):", `${computedStyles.getPropertyValue('width')} x ${computedStyles.getPropertyValue('height')}`);
-    // console.log("All Computed Styles:", computedStyles); // Uncomment for all styles
-  } catch (e) {
-    console.warn("Could not retrieve computed styles.", e);
-  }
-  console.groupEnd();
-
-  // Important: Remove highlight from the clicked element as it's now "selected"
-  // and we don't want the highlight class in its logged outerHTML.
-  removeHighlight(targetElement); 
-  currentHoveredElement = null; // Reset hovered element
-
-  // Optionally, deactivate selection mode after one click:
-  // This would require messaging the background script to update storage and icon.
-  // For this version, selection mode remains active until toggled off via the icon.
-
-  return false; // Further prevent default and stop propagation
-}
-
-// Function to enable or disable the selection mode
-function setSelectionMode(isActive) {
-  selectionModeActive = isActive;
-  console.log(`Element Inspector Tool: Selection mode ${selectionModeActive ? 'ACTIVATED' : 'DEACTIVATED'}.`);
-
-  if (selectionModeActive) {
-    document.addEventListener('mouseover', handleMouseOver, true);
-    document.addEventListener('mouseout', handleMouseOut, true);
-    document.addEventListener('click', handleClick, true); // Use capture phase
-    document.body.style.cursor = 'crosshair';
-  } else {
-    document.removeEventListener('mouseover', handleMouseOver, true);
-    document.removeEventListener('mouseout', handleMouseOut, true);
-    document.removeEventListener('click', handleClick, true);
-    if (currentHoveredElement) {
-      removeHighlight(currentHoveredElement);
-      currentHoveredElement = null;
-    }
-    document.body.style.cursor = 'default';
-  }
-}
-
-// Listen for messages from the background script
-chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
-  if (request.action === "TOGGLE_SELECTION_MODE") {
-    setSelectionMode(request.selectionModeActive);
-    sendResponse({ status: "Selection mode toggled in content script", active: selectionModeActive });
-  }
-  return true; // Indicates that the response might be sent asynchronously
-});
-
-// Initialize mode based on storage when the script loads
-(async () => {
-  try {
-    const { selectionModeActive: initialMode } = await chrome.storage.local.get('selectionModeActive');
-    // Set the mode. This ensures that if the page was reloaded while mode was active,
-    // or if the content script loads after the user has already activated the mode,
-    // it starts in the correct state.
-    setSelectionMode(!!initialMode);
-
-    // Inform background to sync icon title for this tab, as it might have just loaded.
-    await chrome.runtime.sendMessage({
-      action: "SYNC_ICON_TITLE",
-      selectionModeActive: !!initialMode
+(() => {
+    let isSelecting = false;
+    let highlightedElement = null;
+    
+    // Listen for messages from popup
+    chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+        if (message.action === 'start') {
+            startSelection();
+        } else if (message.action === 'stop') {
+            stopSelection();
+        }
     });
-  } catch (error) {
-    console.error("Element Inspector Tool: Error initializing content script state from storage.", error);
-    // Default to off if storage is inaccessible
-    setSelectionMode(false);
-  }
-  console.log("Element Inspector Tool: Content script loaded and initialized.");
+    
+    function startSelection() {
+        isSelecting = true;
+        document.body.style.cursor = 'crosshair';
+        document.addEventListener('mouseover', handleMouseOver, true);
+        document.addEventListener('mouseout', handleMouseOut, true);
+        document.addEventListener('click', handleClick, true);
+    }
+    
+    function stopSelection() {
+        isSelecting = false;
+        document.body.style.cursor = '';
+        document.removeEventListener('mouseover', handleMouseOver, true);
+        document.removeEventListener('mouseout', handleMouseOut, true);
+        document.removeEventListener('click', handleClick, true);
+        removeHighlight();
+    }
+    
+    function handleMouseOver(e) {
+        if (!isSelecting) return;
+        removeHighlight();
+        highlightedElement = e.target;
+        e.target.classList.add('element-selector-highlight');
+    }
+    
+    function handleMouseOut(e) {
+        if (!isSelecting) return;
+        e.target.classList.remove('element-selector-highlight');
+    }
+    
+    function handleClick(e) {
+        if (!isSelecting) return;
+        
+        e.preventDefault();
+        e.stopPropagation();
+        
+        const element = e.target;
+        saveElementAsMarkdown(element);
+        stopSelection();
+    }
+    
+    function removeHighlight() {
+        if (highlightedElement) {
+            highlightedElement.classList.remove('element-selector-highlight');
+            highlightedElement = null;
+        }
+    }
+    
+    function saveElementAsMarkdown(element) {
+        try {
+            const markdown = convertToMarkdown(element);
+            const filename = generateFilename();
+            downloadFile(markdown, filename);
+            chrome.runtime.sendMessage({type: 'success'});
+        } catch (error) {
+            console.error('Error saving element:', error);
+            chrome.runtime.sendMessage({type: 'error'});
+        }
+    }
+    
+    function convertToMarkdown(element) {
+        let markdown = '';
+        
+        // Add header with metadata
+        markdown += `# Element from: ${document.title}\n`;
+        markdown += `**URL:** ${window.location.href}\n`;
+        markdown += `**Element:** ${element.tagName.toLowerCase()}\n`;
+        markdown += `**Date:** ${new Date().toLocaleString()}\n\n`;
+        markdown += '---\n\n';
+        
+        // Convert element content
+        markdown += processElement(element);
+        
+        return markdown;
+    }
+    
+    function processElement(element) {
+        const tag = element.tagName.toLowerCase();
+        
+        switch (tag) {
+            case 'h1': return `# ${getTextContent(element)}\n\n`;
+            case 'h2': return `## ${getTextContent(element)}\n\n`;
+            case 'h3': return `### ${getTextContent(element)}\n\n`;
+            case 'h4': return `#### ${getTextContent(element)}\n\n`;
+            case 'h5': return `##### ${getTextContent(element)}\n\n`;
+            case 'h6': return `###### ${getTextContent(element)}\n\n`;
+            case 'p': return `${processChildren(element)}\n\n`;
+            case 'strong':
+            case 'b': return `**${getTextContent(element)}**`;
+            case 'em':
+            case 'i': return `*${getTextContent(element)}*`;
+            case 'code': return `\`${getTextContent(element)}\``;
+            case 'pre': return `\`\`\`\n${getTextContent(element)}\n\`\`\`\n\n`;
+            case 'a':
+                const href = element.getAttribute('href');
+                const text = getTextContent(element);
+                return href ? `[${text}](${href})` : text;
+            case 'img':
+                const src = element.getAttribute('src');
+                const alt = element.getAttribute('alt') || 'Image';
+                return src ? `![${alt}](${src})\n\n` : '';
+            case 'ul':
+                return processUL(element) + '\n\n';
+            case 'ol':
+                return processOL(element) + '\n\n';
+            case 'blockquote':
+                return processBlockquote(element) + '\n\n';
+            case 'table':
+                return processTable(element) + '\n\n';
+            case 'br':
+                return '\n';
+            default:
+                return processChildren(element);
+        }
+    }
+    
+    function processChildren(element) {
+        let result = '';
+        for (const child of element.childNodes) {
+            if (child.nodeType === Node.TEXT_NODE) {
+                result += child.textContent;
+            } else if (child.nodeType === Node.ELEMENT_NODE) {
+                result += processElement(child);
+            }
+        }
+        return result;
+    }
+    
+    function getTextContent(element) {
+        return element.textContent.trim();
+    }
+    
+    function processUL(ul) {
+        const items = ul.querySelectorAll('li');
+        let result = '';
+        items.forEach(item => {
+            result += `- ${getTextContent(item)}\n`;
+        });
+        return result;
+    }
+    
+    function processOL(ol) {
+        const items = ol.querySelectorAll('li');
+        let result = '';
+        items.forEach((item, index) => {
+            result += `${index + 1}. ${getTextContent(item)}\n`;
+        });
+        return result;
+    }
+    
+    function processBlockquote(blockquote) {
+        const text = getTextContent(blockquote);
+        return text.split('\n').map(line => `> ${line}`).join('\n');
+    }
+    
+    function processTable(table) {
+        const rows = table.querySelectorAll('tr');
+        if (rows.length === 0) return '';
+        
+        let result = '';
+        rows.forEach((row, rowIndex) => {
+            const cells = row.querySelectorAll('td, th');
+            const cellData = Array.from(cells).map(cell => getTextContent(cell).replace(/\|/g, '\\|'));
+            result += `| ${cellData.join(' | ')} |\n`;
+            
+            if (rowIndex === 0) {
+                const separator = Array(cells.length).fill('---').join(' | ');
+                result += `| ${separator} |\n`;
+            }
+        });
+        
+        return result;
+    }
+    
+    function generateFilename() {
+        const url = window.location.hostname;
+        const uuid = generateUUID();
+        return `${url}-${uuid}.md`;
+    }
+    
+    function generateUUID() {
+        return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function(c) {
+            const r = Math.random() * 16 | 0;
+            const v = c === 'x' ? r : (r & 0x3 | 0x8);
+            return v.toString(16);
+        });
+    }
+    
+    function downloadFile(content, filename) {
+        const blob = new Blob([content], { type: 'text/markdown' });
+        const url = URL.createObjectURL(blob);
+        
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = filename;
+        a.style.display = 'none';
+        
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        
+        setTimeout(() => URL.revokeObjectURL(url), 1000);
+    }
 })();
