@@ -1,0 +1,18 @@
+{
+  "name": "element-inspector-tool",
+  "module": "index.ts",
+  "type": "module",
+  "scripts": {
+    "build": "bun build ./src/content.ts ./src/popup.ts ./src/background.ts --outdir ./build && rsync -av --exclude='*.ts' ./src/ ./build/",
+    "test": "bun test"
+  },
+  "devDependencies": {
+    "@types/bun": "latest"
+  },
+  "peerDependencies": {
+    "typescript": "^5.0.0"
+  },
+  "dependencies": {
+    "@types/chrome": "^0.0.325"
+  }
+}
