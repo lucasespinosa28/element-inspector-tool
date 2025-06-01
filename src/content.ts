@@ -1,3 +1,5 @@
+import TurndownService from 'turndown';
+
 (() => {
     let isSelecting: boolean = false;
     let highlightedElement: HTMLElement | null = null;
@@ -72,8 +74,9 @@
     }
 
     function saveElementAsMarkdown(element: HTMLElement) {
+        const turndownService = new TurndownService();
         try {
-            const markdown: string = convertToMarkdown(element);
+            const markdown: string = convertToMarkdown(element, turndownService);
             const filename: string = generateFilename();
             downloadFile(markdown, filename);
             chrome.runtime.sendMessage({ type: 'success' });
@@ -83,7 +86,7 @@
         }
     }
 
-    function convertToMarkdown(element: HTMLElement) {
+    function convertToMarkdown(element: HTMLElement, turndownService: TurndownService) {
         let markdown: string = '';
 
         // Add header with metadata
@@ -94,7 +97,7 @@
         markdown += '---\n\n';
 
         // Convert element content
-        markdown += processElementIterative(element);
+        markdown += turndownService.turndown(element.outerHTML);
 
         return markdown;
     }

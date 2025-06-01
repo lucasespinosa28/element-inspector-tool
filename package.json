@@ -13,6 +13,8 @@
     "typescript": "^5.0.0"
   },
   "dependencies": {
-    "@types/chrome": "^0.0.325"
+    "@types/chrome": "^0.0.325",
+    "@types/turndown": "^5.0.5",
+    "turndown": "^7.2.0"
   }
 }
